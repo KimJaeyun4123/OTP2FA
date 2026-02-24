@@ -45,8 +45,8 @@ public class OtpServiceImpl implements OtpService {
     @Override
     @Transactional
     public void send(ChannelType channel, String destination, String purpose, String ipAddress) {
-        String lockKey     = redisKey("lock", channel, destination);
-        String resendKey   = redisKey("resend", channel, destination);
+        String lockKey   = redisKey("lock", channel, destination);
+        String resendKey = redisKey("resend", channel, destination);
 
         if (Boolean.TRUE.equals(redisTemplate.hasKey(lockKey))) {
             throw OtpException.locked("너무 많은 시도로 인해 잠금 상태입니다. 잠시 후 다시 시도해 주세요.");
@@ -56,14 +56,20 @@ public class OtpServiceImpl implements OtpService {
             throw OtpException.tooManyRequests("재발송은 " + ttl + "초 후에 가능합니다.");
         }
 
-        String otp    = generateOtp();
-        String otpKey = redisKey("otp", channel, destination);
-
-        redisTemplate.opsForValue().set(otpKey, otp, ttlSeconds, TimeUnit.SECONDS);
-        redisTemplate.opsForValue().set(resendKey, "1", resendCooldownSeconds, TimeUnit.SECONDS);
-
         NotificationChannel notificationChannel = channelFactory.get(channel);
-        notificationChannel.send(destination, otp);
+
+        if (notificationChannel.isManagedByProvider()) {
+            // Provider(Twilio Verify 등)가 OTP를 생성·관리 → Redis 저장 불필요
+            notificationChannel.send(destination, null);
+        } else {
+            // 우리 서버에서 OTP 생성 → Redis 저장 → 채널로 발송
+            String otp    = generateOtp();
+            String otpKey = redisKey("otp", channel, destination);
+            redisTemplate.opsForValue().set(otpKey, otp, ttlSeconds, TimeUnit.SECONDS);
+            notificationChannel.send(destination, otp);
+        }
+
+        redisTemplate.opsForValue().set(resendKey, "1", resendCooldownSeconds, TimeUnit.SECONDS);
 
         otpLogRepository.save(OtpLog.builder()
                 .channel(channel)
@@ -80,13 +86,27 @@ public class OtpServiceImpl implements OtpService {
     @Override
     @Transactional
     public boolean verify(ChannelType channel, String destination, String code) {
-        String lockKey     = redisKey("lock", channel, destination);
-        String otpKey      = redisKey("otp", channel, destination);
-        String attemptsKey = redisKey("attempts", channel, destination);
+        String lockKey = redisKey("lock", channel, destination);
 
         if (Boolean.TRUE.equals(redisTemplate.hasKey(lockKey))) {
             throw OtpException.locked("너무 많은 시도로 인해 잠금 상태입니다. 잠시 후 다시 시도해 주세요.");
         }
+
+        NotificationChannel notificationChannel = channelFactory.get(channel);
+
+        if (notificationChannel.isManagedByProvider()) {
+            // Provider에게 검증 위임 (Redis 미사용)
+            boolean verified = notificationChannel.verifyWithProvider(destination, code);
+            if (verified) {
+                otpLogRepository.findByChannelAndDestinationOrderBySentAtDesc(channel, destination)
+                        .stream().findFirst().ifPresent(OtpLog::markVerified);
+            }
+            return verified;
+        }
+
+        // Redis 기반 검증 (Email, Push)
+        String otpKey      = redisKey("otp", channel, destination);
+        String attemptsKey = redisKey("attempts", channel, destination);
 
         String stored = redisTemplate.opsForValue().get(otpKey);
         if (stored == null) {
