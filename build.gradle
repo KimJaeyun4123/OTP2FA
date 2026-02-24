@@ -39,6 +39,9 @@ dependencies {
     // Mail
     implementation 'org.springframework.boot:spring-boot-starter-mail'
 
+    // Twilio (SMS)
+    implementation 'com.twilio.sdk:twilio:10.9.2'
+
     // Security
     implementation 'org.springframework.boot:spring-boot-starter-security'
 
