@@ -42,6 +42,9 @@ dependencies {
     // Twilio (SMS)
     implementation 'com.twilio.sdk:twilio:10.9.2'
 
+    // Firebase Admin SDK (Push)
+    implementation 'com.google.firebase:firebase-admin:9.5.0'
+
     // Security
     implementation 'org.springframework.boot:spring-boot-starter-security'
 
